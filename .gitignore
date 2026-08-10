@@ -1,0 +1,3 @@
+build/
+fastnote-c-gtk4
+*.o
