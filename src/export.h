@@ -5,10 +5,7 @@
 
 #include <glib.h>
 
-typedef struct {
-    gchar *html_content;
-    GError *error;
-} Exporter;
+typedef struct _Exporter Exporter;
 
 Exporter *exporter_new(void);
 void exporter_free(Exporter *e);

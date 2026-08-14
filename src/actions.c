@@ -7,33 +7,6 @@
 #include <stdio.h>
 #include <string.h>
 
-gboolean actions_open_file(FastNoteApp *app, const gchar *filename) {
-    if (!app || !filename) return FALSE;
-    
-    FILE *f = fopen(filename, "r");
-    if (!f) {
-        fn_set_error("Cannot open file: %s", filename);
-        return FALSE;
-    }
-    
-    fseek(f, 0, SEEK_END);
-    glong size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    gchar *content = g_malloc(size + 1);
-    fread(content, 1, size, f);
-    content[size] = '\0';
-    fclose(f);
-    
-    g_free(app->document_content);
-    app->document_content = content;
-    g_free(app->current_path);
-    app->current_path = g_strdup(filename);
-    app->dirty = FALSE;
-    
-    return TRUE;
-}
-
 gboolean actions_save_file(FastNoteApp *app) {
     if (!app || !app->current_path || !app->document_content) return FALSE;
     

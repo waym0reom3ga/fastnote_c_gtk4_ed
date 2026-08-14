@@ -6,7 +6,6 @@
 #include <glib.h>
 #include "app.h"
 
-gboolean actions_open_file(FastNoteApp *app, const gchar *filename);
 gboolean actions_save_file(FastNoteApp *app);
 gboolean actions_save_as_file(FastNoteApp *app, const gchar *new_path);
 gboolean actions_export_html(FastNoteApp *app, const gchar *output_path);

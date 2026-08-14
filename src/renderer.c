@@ -2,79 +2,59 @@
 
 #include "renderer.h"
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 struct _Renderer {
     gchar *html_output;
     GError *error;
 };
 
-static void escape_html(const gchar *input, gchar **output) {
-    if (!input || !output) return;
-    
-    /* Simple HTML escaping */
-    gsize len = strlen(input);
-    *output = g_malloc(len * 6 + 1); /* Max expansion for & -> &amp; */
-    
-    gsize out_idx = 0;
+/* Escape text so raw '<', '>', '&' cannot break the output HTML. */
+static void append_escaped(GString *out, const gchar *start, gsize len) {
     for (gsize i = 0; i < len; i++) {
-        switch (input[i]) {
-            case '&':
-                strcpy(*output + out_idx, "&amp;");
-                out_idx += 5;
-                break;
-            case '<':
-                strcpy(*output + out_idx, "&lt;");
-                out_idx += 4;
-                break;
-            case '>':
-                strcpy(*output + out_idx, "&gt;");
-                out_idx += 4;
-                break;
-            case '"':
-                strcpy(*output + out_idx, "&quot;");
-                out_idx += 6;
-                break;
-            default:
-                (*output)[out_idx++] = input[i];
+        switch (start[i]) {
+            case '&':  g_string_append(out, "&amp;");  break;
+            case '<':  g_string_append(out, "&lt;");   break;
+            case '>':  g_string_append(out, "&gt;");   break;
+            case '"':  g_string_append(out, "&quot;"); break;
+            default:   g_string_append_c(out, start[i]);
         }
     }
-    (*output)[out_idx] = '\0';
 }
 
 gboolean renderer_render_markdown(Renderer *r, const gchar *markdown) {
     if (!r || !markdown) return FALSE;
-    
-    /* Simple markdown to HTML conversion */
-    gsize len = strlen(markdown);
-    r->html_output = g_malloc(len * 2 + 100); /* Buffer for HTML tags */
-    
-    gsize out_idx = 0;
+
+    /* GString grows as needed: a heading-heavy document can expand a lot
+     * ("# " -> "<h1></h1>\n"), so fixed-size buffers are unsafe. */
+    GString *out = g_string_new(NULL);
     const gchar *in = markdown;
-    
+    const gchar *run = markdown; /* start of the unescaped text run */
+
     while (*in) {
         if (strncmp(in, "# ", 2) == 0) {
-            /* Heading */
+            if (in > run) append_escaped(out, run, (gsize)(in - run));
             in += 2;
             const gchar *end = strchr(in, '\n');
-            gsize heading_len = end ? (gsize)(end - in) : strlen(in);
-            out_idx += sprintf(r->html_output + out_idx, "<h1>");
-            for (gsize i = 0; i < heading_len && in[i] != '\n'; i++) {
-                r->html_output[out_idx++] = in[i];
-            }
-            out_idx += sprintf(r->html_output + out_idx, "</h1>\n");
+            gsize len = end ? (gsize)(end - in) : strlen(in);
+            g_string_append(out, "<h1>");
+            append_escaped(out, in, len);
+            g_string_append(out, "</h1>\n");
             if (end) in = end + 1;
             else break;
+            run = in;
         } else if (*in == '\n') {
-            r->html_output[out_idx++] = ' ';
+            if (in > run) append_escaped(out, run, (gsize)(in - run));
+            g_string_append_c(out, ' ');
             in++;
+            run = in;
         } else {
-            r->html_output[out_idx++] = *in++;
+            in++;
         }
     }
-    
-    r->html_output[out_idx] = '\0';
+    if (in > run) append_escaped(out, run, (gsize)(in - run));
+
+    g_free(r->html_output);
+    r->html_output = g_string_free(out, FALSE);
     return TRUE;
 }
 
@@ -91,6 +71,6 @@ Renderer *renderer_new(void) {
 void renderer_free(Renderer *r) {
     if (!r) return;
     g_free(r->html_output);
-    g_error_free(r->error);
+    if (r->error) g_error_free(r->error);
     g_free(r);
 }
