@@ -13,6 +13,7 @@
  */
 
 #include <gtk/gtk.h>
+#include <gdk/gdkkeysyms.h>
 #include <glib/gstdio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,6 +96,28 @@ static GtkWidget *find_label(GtkWidget *root) {
     for (GtkWidget *c = gtk_widget_get_first_child(root); c; c = gtk_widget_get_next_sibling(c)) {
         GtkWidget *found = find_label(c);
         if (found) return found;
+    }
+    return NULL;
+}
+
+/* Find the first GtkEntry anywhere in the subtree (browser path entry). */
+static GtkWidget *find_entry(GtkWidget *root) {
+    if (!root) return NULL;
+    if (GTK_IS_ENTRY(root)) return root;
+    for (GtkWidget *c = gtk_widget_get_first_child(root); c; c = gtk_widget_get_next_sibling(c)) {
+        GtkWidget *found = find_entry(c);
+        if (found) return found;
+    }
+    return NULL;
+}
+
+/* Find a toplevel window by title (the unsaved-changes prompt). */
+static GtkWindow *find_toplevel(const char *title) {
+    GList *tops = gtk_window_list_toplevels();
+    for (GList *l = tops; l; l = l->next) {
+        GtkWindow *w = l->data;
+        const char *t = gtk_window_get_title(w);
+        if (t && strcmp(t, title) == 0) return w;
     }
     return NULL;
 }
@@ -259,8 +282,8 @@ static gboolean drive(void *user_data) {
             mismatch("open.dir-navigates", "browser has no Open button");
         } else {
             click(copen);
-            GtkWidget *pathlabel = find_label(cdialog);
-            const gchar *shown = pathlabel ? gtk_label_get_text(GTK_LABEL(pathlabel)) : NULL;
+            GtkWidget *pentry = find_entry(cdialog);
+            const gchar *shown = pentry ? gtk_editable_get_text(GTK_EDITABLE(pentry)) : NULL;
             gboolean navigated = shown && strstr(shown, "sub");
             gboolean still_open = ui_active_dialog() != NULL;
             if (!navigated) {
@@ -409,6 +432,110 @@ static gboolean drive(void *user_data) {
         }
     }
 
+    /* ---- FR-2 via the browser path entry (spec 3.2) ---------------------
+     * Type a full path into the entry and activate it (the same flow the
+     * acceptance suite drives with Ctrl+L + typed path + Enter). */
+    {
+        gchar *typed = g_build_filename(dir, "b.md", NULL);
+        click(open_btn);
+        GtkWidget *tdlg = ui_active_dialog();
+        GtkWidget *tentry = tdlg ? find_entry(tdlg) : NULL;
+        if (!tentry) {
+            mismatch("browser.path-entry", "browser has no path entry");
+        } else {
+            ok("browser.path-entry", "browser exposes a path entry");
+            gtk_editable_set_text(GTK_EDITABLE(tentry), typed);
+            g_signal_emit_by_name(tentry, "activate", NULL);
+            if (app->current_path && strstr(app->current_path, "b.md")) {
+                ok("browser.typed-path-opens", "typed path + Enter opened the file");
+            } else {
+                mismatch("browser.typed-path-opens", "typed path did not open the file");
+            }
+        }
+        g_free(typed);
+    }
+
+    /* ---- FR-11 accelerators through the real key controller -------------
+     * Each emits the framework's key-pressed signal on the window's own
+     * controller — the same pipeline a real Ctrl+E keystroke takes. */
+    {
+        g_signal_emit_by_name(app->key_ctrl, "key-pressed",
+                              GDK_KEY_e, 0, GDK_CONTROL_MASK, NULL);
+        GtkWidget *dlg = ui_active_dialog();
+        if (!dlg) {
+            mismatch("accel.export", "Ctrl+E did not open the export dialog");
+        } else {
+            ok("accel.export", "Ctrl+E opens the export dialog");
+            GtkWidget *cbtn = find_button(dlg, "Cancel");
+            if (cbtn) click(cbtn);
+        }
+
+        g_signal_emit_by_name(app->key_ctrl, "key-pressed",
+                              GDK_KEY_E, 0, GDK_CONTROL_MASK | GDK_SHIFT_MASK, NULL);
+        dlg = ui_active_dialog();
+        if (!dlg) {
+            mismatch("accel.export-pdf", "Ctrl+Shift+E did not open the PDF dialog");
+        } else {
+            ok("accel.export-pdf", "Ctrl+Shift+E opens the PDF dialog");
+            GtkWidget *cbtn = find_button(dlg, "Cancel");
+            if (cbtn) click(cbtn);
+        }
+
+        g_signal_emit_by_name(app->key_ctrl, "key-pressed",
+                              GDK_KEY_S, 0, GDK_CONTROL_MASK | GDK_SHIFT_MASK, NULL);
+        dlg = ui_active_dialog();
+        if (!dlg) {
+            mismatch("accel.save-as", "Ctrl+Shift+S did not open the Save As dialog");
+        } else {
+            ok("accel.save-as", "Ctrl+Shift+S opens the Save As dialog");
+            GtkWidget *cbtn = find_button(dlg, "Cancel");
+            if (cbtn) click(cbtn);
+        }
+    }
+
+    /* ---- editor owns the keyboard after an open (FR-3) ------------------ */
+    if (gtk_window_get_focus(GTK_WINDOW(app->window)) == (GtkWidget *)app->editor) {
+        ok("open.editor-focused", "editor has keyboard focus after open");
+    } else {
+        mismatch("open.editor-focused", "editor not focused after open");
+    }
+
+    /* ---- event-file publication (spec 5.1) ------------------------------ */
+    {
+        gchar *evcontent = NULL;
+        g_file_get_contents(app->event_file, &evcontent, NULL, NULL);
+        const gchar *ev = evcontent ? evcontent : "";
+        /* 'painted' is written by an idle callback after drive() finishes;
+         * the QA suite verifies it against the real binary with --event-file. */
+        if (strstr(ev, "open") && strstr(ev, "save") &&
+            strstr(ev, "save-as") && strstr(ev, "export-html") && strstr(ev, "export-pdf")) {
+            ok("event.markers", "open/save/save-as/export-html/export-pdf published");
+        } else {
+            gchar *msg = g_strdup_printf("event file incomplete: %s", ev);
+            mismatch("event.markers", msg);
+            g_free(msg);
+        }
+        g_free(evcontent);
+    }
+
+    /* ---- FR-9: closing a dirty document must prompt, never discard ------ */
+    {
+        gtk_text_buffer_set_text(app->editor_buffer, "unsaved change", -1);
+        gboolean handled = FALSE;
+        g_signal_emit_by_name(app->window, "close-request", &handled);
+        GtkWindow *prompt = find_toplevel("Unsaved changes");
+        if (!handled) {
+            mismatch("close.dirty-prompts", "dirty close request was not intercepted");
+        } else if (!prompt) {
+            mismatch("close.dirty-prompts", "no unsaved-changes prompt appeared");
+        } else {
+            ok("close.dirty-prompts", "dirty close request answered with a prompt");
+            gtk_window_destroy(prompt);
+        }
+        /* clean state for the remaining checks */
+        app->dirty = FALSE;
+    }
+
     /* ---- Theme toggle (visual state change) ----------------------------- */
     int theme_before = app->theme;
     click(theme_btn);
@@ -485,6 +612,7 @@ int main(int argc, char **argv) {
 
     FastNoteApp *app = fastnote_app_new();
     app->notes_dir = g_strdup(dir);
+    app->event_file = g_build_filename(dir, "events.txt", NULL);
 
     /* Drive the test sequence from inside the running main loop. */
     g_timeout_add(100, drive, app);

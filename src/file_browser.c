@@ -11,7 +11,7 @@ struct _FileBrowser {
     GList *entries;          /* list of gchar* full paths (files and dirs) */
     gint selected_index;     /* index into entries of the selected row, -1 = none */
     GtkWidget *list;         /* GtkListBox */
-    GtkWidget *path_label;   /* GtkLabel showing current dir */
+    GtkWidget *path_entry;   /* GtkEntry showing the current dir / typed path */
     GtkWidget *widget;       /* top-level vbox */
     FileBrowserActivateFn activate_fn;
     gpointer activate_data;
@@ -68,7 +68,7 @@ static void on_up_clicked(GtkWidget *widget, gpointer user_data) {
 }
 
 static void fb_rebuild_list(FileBrowser *fb) {
-    gtk_label_set_label(GTK_LABEL(fb->path_label), fb->current_dir);
+    gtk_editable_set_text(GTK_EDITABLE(fb->path_entry), fb->current_dir);
 
     /* clear old rows and entries */
     GtkWidget *child;
@@ -112,13 +112,39 @@ static void fb_rebuild_list(FileBrowser *fb) {
     closedir(dir);
 }
 
+/* The path entry (spec §3.2): Enter resolves the typed path. A directory
+ * navigates into it; a file is opened through the normal activate callback;
+ * a bare name is tried relative to the current directory. */
+static void on_path_activate(GtkEntry *entry, gpointer user_data) {
+    FileBrowser *fb = user_data;
+    const gchar *text = gtk_editable_get_text(GTK_EDITABLE(entry));
+    if (!text || !*text) return;
+
+    struct stat st;
+    if (stat(text, &st) == 0 && S_ISDIR(st.st_mode)) {
+        file_browser_set_dir(fb, text);
+        return;
+    }
+    if (stat(text, &st) == 0 && !S_ISDIR(st.st_mode) && fb->activate_fn) {
+        fb->activate_fn(fb, text, fb->activate_data);
+        return;
+    }
+    gchar *full = g_build_filename(fb->current_dir, text, NULL);
+    if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
+        file_browser_set_dir(fb, full);
+    } else if (stat(full, &st) == 0 && !S_ISDIR(st.st_mode) && fb->activate_fn) {
+        fb->activate_fn(fb, full, fb->activate_data);
+    }
+    g_free(full);
+}
+
 FileBrowser *file_browser_new(const gchar *start_dir) {
     FileBrowser *fb = g_malloc0(sizeof(FileBrowser));
     fb->current_dir = g_strdup(start_dir ? start_dir : g_get_home_dir());
 
-    fb->path_label = gtk_label_new(NULL);
-    gtk_label_set_xalign(GTK_LABEL(fb->path_label), 0.0);
-    gtk_label_set_ellipsize(GTK_LABEL(fb->path_label), PANGO_ELLIPSIZE_START);
+    fb->path_entry = gtk_entry_new();
+    gtk_entry_set_activates_default(GTK_ENTRY(fb->path_entry), TRUE);
+    g_signal_connect(fb->path_entry, "activate", G_CALLBACK(on_path_activate), fb);
 
     GtkWidget *scroll = gtk_scrolled_window_new();
     fb->list = gtk_list_box_new();
@@ -132,7 +158,7 @@ FileBrowser *file_browser_new(const gchar *start_dir) {
     gtk_box_append(GTK_BOX(buttons), open_btn);
 
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    gtk_box_append(GTK_BOX(vbox), fb->path_label);
+    gtk_box_append(GTK_BOX(vbox), fb->path_entry);
     gtk_box_append(GTK_BOX(vbox), scroll);
     gtk_box_append(GTK_BOX(vbox), buttons);
     gtk_widget_set_vexpand(scroll, TRUE);
@@ -198,6 +224,10 @@ const gchar *file_browser_selected_path(FileBrowser *fb) {
 
 GtkWidget *file_browser_get_widget(FileBrowser *fb) {
     return fb ? fb->widget : NULL;
+}
+
+GtkWidget *file_browser_get_entry(FileBrowser *fb) {
+    return fb ? fb->path_entry : NULL;
 }
 
 void file_browser_set_activate_cb(FileBrowser *fb, FileBrowserActivateFn fn,

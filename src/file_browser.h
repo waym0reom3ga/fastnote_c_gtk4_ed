@@ -26,6 +26,10 @@ const gchar *file_browser_selected_path(FileBrowser *fb);
 /* The widget tree; must be packed into a window by the caller. */
 GtkWidget *file_browser_get_widget(FileBrowser *fb);
 
+/* The path entry (spec §3.2): a text field for typing a path directly.
+ * Ctrl+L focuses it, Enter activates (directory -> navigate, file -> open). */
+GtkWidget *file_browser_get_entry(FileBrowser *fb);
+
 /* Callback typedef: invoked when the user activates a row (double-click /
  * Enter) or presses Open with a file selected.  cb is the user pointer. */
 typedef void (*FileBrowserActivateFn)(FileBrowser *fb, const gchar *path,
